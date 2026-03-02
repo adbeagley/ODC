@@ -18,7 +18,7 @@ from .lookup_tables import (
 
 
 class occupancy_dual_contouring:
-    def __init__(self, device):
+    def __init__(self, device: th.device = None):
         self.device = device
         self.vitogi = th.tensor(vitogi, dtype=th.int64, device=device)
 
