@@ -1,0 +1,5 @@
+// {
+//     "env": {
+//         "PYTHONPATH": "${workspaceFolder}/${pathSeparator}${workspaceFolder}/.site-packages${pathSeparator}${env:PYTHONPATH}"
+//     }
+// }
