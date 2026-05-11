@@ -1,7 +1,7 @@
 {
     "editor.formatOnSave": true,
     "editor.defaultFormatter": null,
-    "workbench.colorTheme": "Default Dark+",
+    "workbench.colorTheme": "Dark+",
     "editor.rulers": [
         88
     ],
