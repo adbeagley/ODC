@@ -15,7 +15,7 @@ from vtkmodules.all import (
     vtkImageStencil,
     vtkSurfaceNets3D,
 )
-from odc import occupancy_dual_contouring
+from odc import occupancy_dual_contouring, ManifoldDualContouring
 
 
 def main():
@@ -47,16 +47,14 @@ def main():
     selection = select_enclosed_points(image, surf_mesh).point_data["SelectedPoints"]
     print(f"Surface Net Invalid Points: {np.nansum(selection != mask)}")
 
-    mesh = odc_surface(
-        image,
-        scalars="Mask",
+    mdc = ManifoldDualContouring(
         smoothing=smoothing,
-        constraint=constraint,
         n_iters=n_iters,
         relaxation_factor=relaxation_factor,
+        constraint=constraint,
         eps=eps,
-        isovalue=0.5,
     )
+    mesh = mdc.extract_surface2(image, scalars="Mask", isovalue=0.5)
     edge_lengths = (
         mesh.extract_all_edges()
         .compute_cell_sizes(length=True, area=False, volume=False)

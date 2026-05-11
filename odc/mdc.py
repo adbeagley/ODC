@@ -11,11 +11,8 @@ from vtkmodules.all import (
     vtkConstrainedSmoothingFilter,
     vtkTransformPolyDataFilter,
     vtkOrientPolyData,
-    vtkPolyDataToImageStencil,
-    vtkImageStencil,
-    vtkSurfaceNets3D,
 )
-from odc import occupancy_dual_contouring
+from .odc import occupancy_dual_contouring
 
 
 class ManifoldDualContouring:
@@ -75,8 +72,8 @@ class ManifoldDualContouring:
                 constant_values=self.background,
             )
 
-        # odc requires the grid to be aligned with the global axes and centered about the
-        # global origin
+        # odc requires the grid to be aligned with the global axes and centered about
+        # the global origin
         min_coord = -spacing * (dims - 1) / 2
         max_coord = min_coord + spacing * dims
         grid_pts = tuple(
@@ -119,6 +116,98 @@ class ManifoldDualContouring:
         transform = vtkTransform()
         transform.PostMultiply()
         transform.Translate(spacing * (np.asarray(image.dimensions) - 1) / 2)
+        transform.Scale(1 / spacing)
+        transform.Concatenate(image.GetIndexToPhysicalMatrix())
+
+        orient_filter = vtkOrientPolyData()
+        orient_filter.SetInputData(mesh)
+        orient_filter.ConsistencyOn()
+        orient_filter.AutoOrientNormalsOn()
+        orient_filter.NonManifoldTraversalOn()
+
+        transform_filter = vtkTransformPolyDataFilter()
+        transform_filter.SetTransform(transform)
+
+        if self.smoothing:
+            smoother = vtkConstrainedSmoothingFilter()
+            smoother.AddInputConnection(orient_filter.GetOutputPort())
+            smoother.SetNumberOfIterations(self.n_iters)
+            smoother.SetConstraintStrategyToConstraintBox()
+            smoother.SetConstraintBox(
+                self.constraint * grid_spacing * self.__CBOX_LIMIT
+            )
+            smoother.SetRelaxationFactor(self.relaxation_factor)
+            smoother.SetConvergence(self.eps)
+            transform_filter.SetInputConnection(smoother.GetOutputPort())
+        else:
+            transform_filter.SetInputConnection(orient_filter.GetOutputPort())
+        transform_filter.Update()
+
+        mesh: pv.PolyData = pv.wrap(transform_filter.GetOutput())
+        return mesh
+
+    def extract_surface2(
+        self, image: pv.ImageData, scalars: str, isovalue: float = 0.5
+    ):
+        """Use occupancy dual contouring to extract a surface mesh from the label map
+        defined by `point_data_name`.
+
+        Parameters
+        -------------
+
+        """
+
+        spacing = np.asarray(image.spacing)
+        dims = np.asarray(image.dimensions)
+        data = image.point_data[scalars].reshape(dims, order="F")
+
+        # odc requires the grid to be aligned with the global axes and centered about
+        # the global origin
+        origin = -spacing * (dims - 1) / 2
+        grid_pts = tuple(origin[i] + np.arange(dims[i]) * spacing[i] for i in range(3))
+        interpolator = RegularGridInterpolator(
+            points=grid_pts,
+            values=data,
+            method="linear",
+            fill_value=self.background,
+            bounds_error=False,
+        )
+
+        # need to sample over a cubic grid when using ODC so effectively pad the grid to
+        # be a cube, don't need to pad the RegularGridInterpolator though as it just
+        # returns background if out of bounds
+        num_grid = np.max(dims)
+        grid_dims = np.full(3, num_grid, dtype=np.int32)
+        min_coord = -spacing * (grid_dims - 1) / 2
+        max_coord = min_coord + (spacing * grid_dims)
+
+        grid_spacing = (
+            max_coord - min_coord
+        ) / num_grid  # this should equal image spacing
+        if not np.allclose(grid_spacing, spacing):
+            print("WARNING: ODC grid spacing does not match image spacing!")
+
+        impl_func = partial(self.__impl_dist_func, interpolator=interpolator)
+
+        odc_filter = occupancy_dual_contouring()
+        verts, faces = odc_filter.extract_mesh(
+            imp_func=impl_func,
+            min_coord=min_coord,
+            max_coord=max_coord,
+            num_grid=num_grid,
+            isolevel=isovalue,
+        )
+        # construct mesh
+        cells = np.empty((faces.shape[0], 4), dtype=int)
+        cells[:, 0] = 3
+        cells[:, 1:] = np.asarray(faces)
+        mesh = pv.PolyData(np.asarray(verts), faces=cells.ravel(order="C"))
+
+        # construct transform to align mesh with the original image axes
+        # Note: can't use min_coord as that may be padded and result in wrong offset
+        transform = vtkTransform()
+        transform.PostMultiply()
+        transform.Translate(-origin)
         transform.Scale(1 / spacing)
         transform.Concatenate(image.GetIndexToPhysicalMatrix())
 
