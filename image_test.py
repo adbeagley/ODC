@@ -26,8 +26,8 @@ def main():
 
     image.GetPointData().SetActiveScalars("Mask")
 
-    smoothing = False
-    constraint = 0.5
+    smoothing = True
+    constraint = 0.985
     n_iters = 100
     relaxation_factor = 0.05
     eps = 1e-6
@@ -42,6 +42,8 @@ def main():
         eps=eps,
     )
 
+    # surf_mesh.subdivide(nsub=1)
+    print(surf_mesh)
     selection = select_enclosed_points(image, surf_mesh).point_data["SelectedPoints"]
     print(f"Surface Net Invalid Points: {np.nansum(selection != mask)}")
 
@@ -53,18 +55,15 @@ def main():
         n_iters=n_iters,
         relaxation_factor=relaxation_factor,
         eps=eps,
-        isovalue=0.25,
-        normalize_spacing=False,
+        isovalue=0.5,
     )
-    mesh = mesh.compute_normals()
-
     edge_lengths = (
         mesh.extract_all_edges()
         .compute_cell_sizes(length=True, area=False, volume=False)
         .cell_data["Length"]
     )
     print(mesh)
-    print(edge_lengths)
+    print(np.nanmean(edge_lengths), np.nanmax(edge_lengths), np.nanmin(edge_lengths))
 
     selection = select_enclosed_points(image, mesh).point_data["SelectedPoints"]
     print(f"ODC Invalid Points: {np.nansum(selection != mask)}")
@@ -105,7 +104,6 @@ def odc_surface(
     relaxation_factor: float = 0.05,
     constraint: float = 0.9,
     eps: float = 1e-6,
-    normalize_spacing: bool = False,
 ):
     """Use occupancy dual contouring to extract a surface mesh from the label map
     defined by `point_data_name`.
@@ -113,20 +111,14 @@ def odc_surface(
     Parameters
     -------------
 
-    normalize_spacing: bool
-        Whether to normalize the image spacing to (1,1,1) during isosurface extraction.
-        If enabled the extracted mesh is still transformed back to the correct image
-        dimensions.
     """
-
-    if normalize_spacing:
-        spacing = np.array([1, 1, 1])
-    else:
-        spacing = np.asarray(image.spacing)
+    spacing = np.asarray(image.spacing)
     dims = np.asarray(image.dimensions)
     data = image.point_data[scalars].reshape(dims, order="F")
 
-    if not np.all(dims[0] == dims):  # pad image to use a square grid
+    if not np.all(dims[0] == dims):
+        # pad image to use a square grid such that it produces an output that only
+        # contains the segmented region if not smoothed
         max_dim = np.max(dims)
         diffs = max_dim - dims
         dims = dims + diffs
@@ -145,6 +137,11 @@ def odc_surface(
     max_coord = min_coord + spacing * dims
     grid_pts = tuple(min_coord[i] + np.arange(dims[i]) * spacing[i] for i in range(3))
 
+    num_grid = np.max(dims)
+    grid_spacing = (max_coord - min_coord) / num_grid  # this should equal image spacing
+    if not np.allclose(grid_spacing, spacing):
+        print("WARNING: ODC grid spacing does not match image spacing!")
+
     interpolator = RegularGridInterpolator(
         points=grid_pts,
         values=data,
@@ -154,13 +151,6 @@ def odc_surface(
     )
 
     impl_func = partial(impl_dist_func, interpolator=interpolator)
-
-    # num_grid = np.max(int(np.ceil(dims / 2)))
-    num_grid = np.max(dims)
-    grid_spacing = (max_coord - min_coord) / num_grid
-    print(image.spacing)
-    print(num_grid)
-    print(grid_spacing)
 
     odc_filter = occupancy_dual_contouring()
     verts, faces = odc_filter.extract_mesh(
@@ -194,11 +184,19 @@ def odc_surface(
     transform_filter.SetTransform(transform)
 
     if smoothing:
+        # this method does not seem to limit the smoothing as much since the placement
+        # of vertexes is not guaranteed to be dead center. Therefore, need to limit the
+        # constraint box to a smaller region. This limit was found empirically, so may
+        # need fine-tuning in the future for different meshes.
+        # - This was tuned by setting `constraint==1` and comparing the number of
+        # invalid points generated relative to the vtkSurfaceNets3D filter and selecting
+        # the limit that resulted in an equal number of invalid points.
+        cbox_limit = 0.42
         smoother = vtkConstrainedSmoothingFilter()
         smoother.AddInputConnection(orient_filter.GetOutputPort())
         smoother.SetNumberOfIterations(n_iters)
         smoother.SetConstraintStrategyToConstraintBox()
-        smoother.SetConstraintBox(constraint * grid_spacing)
+        smoother.SetConstraintBox(constraint * grid_spacing * cbox_limit)
         smoother.SetRelaxationFactor(relaxation_factor)
         smoother.SetConvergence(eps)
         transform_filter.SetInputConnection(smoother.GetOutputPort())
