@@ -1,0 +1,35 @@
+name: odc-dev
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python==3.12  # 3.13 seems to solve super slowly
+
+  # dev
+  - pytest
+  - typing_extensions
+  - pyclean
+  - tbb-devel
+  - cmake
+  - ninja
+
+  # core science packages
+  - conda-forge::numpy
+  - conda-forge::scipy
+  - pytorch::pytorch
+
+  # mesh requirements
+  - meshio >=5
+  - vtk == 9.5.1
+
+  - pyvista >= 0.46.1 # helper for vtk
+
+  # plotting and display
+  - colorcet
+  - tabulate
+  # - glib # pyvista rendering
+  - imageio-ffmpeg # pyvista rendering
+  - xvfbwrapper # pyvista rendering on linux
+  - trame # for pyvista
+  - matplotlib
+  - imageio
